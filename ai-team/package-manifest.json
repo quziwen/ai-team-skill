@@ -1,12 +1,12 @@
 {
   "name": "ai-team",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "files": {
-    "INSTALL.md": "fec5a7c982df34f8c7925649f6a9951c3ff00806392c323e1f385c910eb2210f",
-    "SKILL.md": "11545e8cbfcc9fc949b2a782a49c9d504a61af095527c08006ca9f4e7183f914",
+    "INSTALL.md": "4c4b43a7f8ced0772cd83ab0f3f67eed8cb2eb6bc6657a9e9709b50a952c876e",
+    "SKILL.md": "b0302c670942051c41e3493264da64b998121ef125962558f11766380f7c935e",
     "agents/openai.yaml": "58f092036197d49b6d54aff9170a313bfcd02446195bb63c2a27f249b97d0564",
-    "references/agent-assignment.md": "52848838f0977d9e5b1bfa283c2a06b2c0f2492e5aba666fefb87ec6a15b2bd3",
-    "references/compatibility.md": "131653a5f1a5ac94fad1e8313598f910ace69e05cff0cfdd7456742426bb77de",
+    "references/agent-assignment.md": "7c5354aa2370537e2d1c8d2509fcfbfe98a97f93bd39cfdcdfe666a6c9405c47",
+    "references/compatibility.md": "c9cee5ab222e93de24167e0e4779bc1de5bd87e7e7003a1f5ba7d7779661d0e7",
     "references/plain-chinese.md": "646361071530d531d471b0eac36056ce38aeba7a81b10ba7695c998e21173c16",
     "references/review-contract.md": "618b08c5615e43399bdca09730505f5cf978291ec0cb70f2d12ce046f7758fd4",
     "scripts/ai_team/__init__.py": "742f3bc62d42880f5185f706521440305f31b7b711d1e8f420f779168bea6393",
@@ -18,7 +18,7 @@
     "scripts/ai_team/presenter.py": "72925450a6f13806d8f8a37793b40442a6c463c46702bc7fca61a3a8b552db2a",
     "scripts/ai_team/project.py": "4b0524236860db672e42b10fdb39554d0f5091af88ac3acd24030672dd9a2aa4",
     "scripts/ai_team/runner_backend.py": "a9149296ea9d64fd63116b4260626dbed772f08b0d88e08f33ff7660410684b7",
-    "scripts/ai_team/skill_plan.py": "e822346382c8b27e420ae957237bcc0a85bc44c3d22145c95d80cd34367c5e79",
+    "scripts/ai_team/skill_plan.py": "8602b4217e0f3537bc447601b87d979067674e6e22e1cfc7f0a941ee91d373ef",
     "scripts/ai_team/workflow.py": "69834002a4d0cf6e11cd465eef63f39d19862dcbea9fd0c4a1bf194a374a9723",
     "scripts/demo.py": "c1a72b811ee34158b8fd799e4a7c633d62f455df532f44a7db7f0be5082b9205",
     "scripts/plan_team.py": "6a6dd08406d90657e934bfdf104e205384eaa45bf1626a699003040519718918"

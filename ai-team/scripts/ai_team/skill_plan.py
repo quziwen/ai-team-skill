@@ -50,6 +50,8 @@ class AgentToolOption:
     max_parallel_agents: int = 1
     can_select_model: bool = False
     default_model_id: str | None = None
+    current_model_ids: tuple[str, ...] | None = None
+    unavailable_model_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.id) is not str or not self.id.strip():
@@ -68,6 +70,16 @@ class AgentToolOption:
             raise ValueError("同时运行数量必须是正整数")
         if self.default_model_id is not None and self.default_model_id not in {m.id for m in self.models}:
             raise ValueError("默认模型不在本工具已知模型中")
+        for field, ids in (
+            ("当前模型清单", self.current_model_ids),
+            ("不可用模型清单", self.unavailable_model_ids),
+        ):
+            if field == "当前模型清单" and ids is None:
+                continue
+            if type(ids) is not tuple or any(type(item) is not str or not item.strip() for item in ids):
+                raise ValueError(f"{field}必须由非空模型编号组成")
+            if len(set(ids)) != len(ids):
+                raise ValueError(f"{field}中的模型编号重复")
 
 
 @dataclass(frozen=True)
@@ -159,6 +171,19 @@ def suggest_team_for_tools(
             elif len(models) != 1:
                 limitations.append(f"{tool.id} 不能选择模型且默认模型未知，不猜测使用哪个模型。")
                 models = ()
+        if tool.current_model_ids is None:
+            limitations.append(f"{tool.id} 未提供单独的当前模型清单；仅按当次报告的候选安排，未验证实时可用性。")
+        else:
+            current_ids = set(tool.current_model_ids)
+            absent = [model.id for model in models if model.id not in current_ids]
+            if absent:
+                limitations.append(f"{tool.id} 的候选不在当前模型清单中，已排除：{', '.join(absent)}。")
+            models = tuple(model for model in models if model.id in current_ids)
+        unavailable_ids = set(tool.unavailable_model_ids)
+        rejected = [model.id for model in models if model.id in unavailable_ids]
+        if rejected:
+            limitations.append(f"{tool.id} 本次已确认不可用的模型不再参与分工：{', '.join(rejected)}。")
+        models = tuple(model for model in models if model.id not in unavailable_ids)
         candidates.extend((tool, model) for model in models)
 
     if not candidates:
@@ -256,6 +281,12 @@ def main() -> int:
         data = json.load(sys.stdin)
         tools = []
         for item in data["tools"]:
+            current_model_ids = item.get("current_model_ids")
+            unavailable_model_ids = item.get("unavailable_model_ids", [])
+            if (
+                current_model_ids is not None and type(current_model_ids) is not list
+            ) or type(unavailable_model_ids) is not list:
+                raise ValueError("模型清单必须使用 JSON 数组；当前清单未知时填 null")
             models = []
             for model in item["models"]:
                 if type(model["capabilities"]) is not list:
@@ -272,6 +303,8 @@ def main() -> int:
                 max_parallel_agents=item.get("max_parallel_agents", 1),
                 can_select_model=item.get("can_select_model", False),
                 default_model_id=item.get("default_model_id"),
+                current_model_ids=None if current_model_ids is None else tuple(current_model_ids),
+                unavailable_model_ids=tuple(unavailable_model_ids),
             ))
         suggestion = suggest_team_for_tools(
             data["task"], tuple(tools),
