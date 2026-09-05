@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Team"
+  short_description: "按已有工具和模型安排分工、互审、修改与合并，检查最低使用条件和中文表达"
+  default_prompt: "用 $ai-team 完成这项任务，自动安排分工、互审和修改，最后给我一份清楚直接的成果。"
