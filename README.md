@@ -6,7 +6,7 @@ AI Team 是一个多 Agent 协作 Skill。你不需要先研究该选哪个模�
 
 它会根据当前工具实际能调用的 Agent、模型和能力信息安排工作。角色不固定绑定某个厂商：适合分析的负责分析，适合执行的负责执行，适合审阅的负责检查。能力信息不足时，会明确说明哪些安排还需要试用验证。
 
-[下载 v0.2.1 安装包](https://github.com/quziwen/ai-team-skill/releases/download/v0.2.1/ai-team.zip) · [安装说明](ai-team/INSTALL.md) · [最低使用条件](ai-team/references/compatibility.md) · [版本说明](https://github.com/quziwen/ai-team-skill/releases/tag/v0.2.1)
+[下载 v0.2.2 安装包](https://github.com/quziwen/ai-team-skill/releases/download/v0.2.2/ai-team.zip) · [安装说明](ai-team/INSTALL.md) · [最低使用条件](ai-team/references/compatibility.md) · [版本说明](https://github.com/quziwen/ai-team-skill/releases/tag/v0.2.2)
 
 ## 它怎样完成一项任务？
 
@@ -38,7 +38,7 @@ AI Team 是一个多 Agent 协作 Skill。你不需要先研究该选哪个模�
 
 ## 怎样安装和开始试用？
 
-下载完整的 [ai-team.zip](https://github.com/quziwen/ai-team-skill/releases/download/v0.2.1/ai-team.zip)，解压后保留整个 `ai-team` 文件夹，不要只复制其中的 `SKILL.md`。
+下载完整的 [ai-team.zip](https://github.com/quziwen/ai-team-skill/releases/download/v0.2.2/ai-team.zip)，解压后保留整个 `ai-team` 文件夹，不要只复制其中的 `SKILL.md`。
 
 - 工具支持安装 Skill：按照该工具支持的方式安装完整文件夹。
 - 工具不支持自动发现 Skill，但可以读取本地文件：让它读取 `SKILL.md`，并按要求读取附带说明。
@@ -66,11 +66,13 @@ AI Team 是一个多 Agent 协作 Skill。你不需要先研究该选哪个模�
 
 ## 当前版本与使用限制
 
-当前版本为 **v0.2.1 试用版**。
+当前版本为 **v0.2.2 试用版**。
+
+本次只补充两处工作要求：动手前发现方案偏离目标、关键假设没依据或明显做得过多时，说明理由并建议更小的下一步；审阅时有依据地质疑和回应，没有问题就通过，不凑反对意见，也不因对方坚持就改变有依据的结论。用户决定目标和取舍，有新证据时及时纠正。不增加 Agent、模型调用或配置。
 
 已完成本地流程测试、安装包检查和确定性模拟测试，包括正常完成、第三方解决分歧，以及仍需用户决定的情况。
 
-这些本地验证**不等于所有 AI 工具和模型都已适配，也不等于真实 Agent 的工作质量已经得到验证**。不同工具能否正确创建、恢复和调用子 Agent，需要在实际环境中确认。
+这些本地验证**不等于所有 AI 工具和模型都已适配，也不等于真实 Agent 的工作质量已经得到验证**。两处新增要求是否改善真实判断，仍需实际试用；本次更新没有调用真实模型。不同工具能否正确创建、恢复和调用子 Agent，需要在实际环境中确认。
 
 安装 Skill 不代表授权它调用其他模型或向外发送材料。真实执行前，会说明拟使用的角色、调用次数上限及本地文件操作范围；获得同意后，在该范围内继续工作。发布、发送消息和其他外部写入仍需单独确认。
 

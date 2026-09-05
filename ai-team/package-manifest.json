@@ -1,14 +1,14 @@
 {
   "name": "ai-team",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "files": {
-    "INSTALL.md": "31d14ed1de161dab0c9e30db886a705ef03758b79e8dcc72adebe86bfd87f388",
-    "SKILL.md": "9c4be7d661216c34dafa87227e9d555617bb2e8b352666247debe2150be28e21",
+    "INSTALL.md": "fec5a7c982df34f8c7925649f6a9951c3ff00806392c323e1f385c910eb2210f",
+    "SKILL.md": "11545e8cbfcc9fc949b2a782a49c9d504a61af095527c08006ca9f4e7183f914",
     "agents/openai.yaml": "58f092036197d49b6d54aff9170a313bfcd02446195bb63c2a27f249b97d0564",
     "references/agent-assignment.md": "52848838f0977d9e5b1bfa283c2a06b2c0f2492e5aba666fefb87ec6a15b2bd3",
     "references/compatibility.md": "131653a5f1a5ac94fad1e8313598f910ace69e05cff0cfdd7456742426bb77de",
     "references/plain-chinese.md": "646361071530d531d471b0eac36056ce38aeba7a81b10ba7695c998e21173c16",
-    "references/review-contract.md": "76f1f8df2d923aa8b34ae4d4e805c453e584922fa7e22d93d777a2f79ceadb42",
+    "references/review-contract.md": "618b08c5615e43399bdca09730505f5cf978291ec0cb70f2d12ce046f7758fd4",
     "scripts/ai_team/__init__.py": "742f3bc62d42880f5185f706521440305f31b7b711d1e8f420f779168bea6393",
     "scripts/ai_team/__main__.py": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b",
     "scripts/ai_team/agents.py": "79496a4c2fc8d0c504147a7d42484bad2fe38516b17bd941f8dbf9835d87dade",
