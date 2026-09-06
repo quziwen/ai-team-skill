@@ -1,14 +1,15 @@
 {
   "name": "ai-team",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "files": {
-    "INSTALL.md": "4c4b43a7f8ced0772cd83ab0f3f67eed8cb2eb6bc6657a9e9709b50a952c876e",
-    "SKILL.md": "b0302c670942051c41e3493264da64b998121ef125962558f11766380f7c935e",
+    "INSTALL.md": "d6182d85815642bd2ac4517db6a2b1b3fcede74bf924ed68a7a6759e1b96d45b",
+    "SKILL.md": "c0e84d8bbda7a68b2c68bc70aae854245d1f25d53eb3095e365bb6820cce4382",
     "agents/openai.yaml": "58f092036197d49b6d54aff9170a313bfcd02446195bb63c2a27f249b97d0564",
     "references/agent-assignment.md": "7c5354aa2370537e2d1c8d2509fcfbfe98a97f93bd39cfdcdfe666a6c9405c47",
     "references/compatibility.md": "c9cee5ab222e93de24167e0e4779bc1de5bd87e7e7003a1f5ba7d7779661d0e7",
     "references/plain-chinese.md": "646361071530d531d471b0eac36056ce38aeba7a81b10ba7695c998e21173c16",
-    "references/review-contract.md": "618b08c5615e43399bdca09730505f5cf978291ec0cb70f2d12ce046f7758fd4",
+    "references/real-agent-acceptance.md": "87610cefe63a20dc0f6b14adc49f4067d1a31caca5072916a20e7485cb3b0bb6",
+    "references/review-contract.md": "7d73b7213c549722fc189e3eff516c633d6d5b31f812f4083c77a84f8eaf8fe8",
     "scripts/ai_team/__init__.py": "742f3bc62d42880f5185f706521440305f31b7b711d1e8f420f779168bea6393",
     "scripts/ai_team/__main__.py": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b",
     "scripts/ai_team/agents.py": "79496a4c2fc8d0c504147a7d42484bad2fe38516b17bd941f8dbf9835d87dade",
@@ -21,6 +22,8 @@
     "scripts/ai_team/skill_plan.py": "8602b4217e0f3537bc447601b87d979067674e6e22e1cfc7f0a941ee91d373ef",
     "scripts/ai_team/workflow.py": "69834002a4d0cf6e11cd465eef63f39d19862dcbea9fd0c4a1bf194a374a9723",
     "scripts/demo.py": "c1a72b811ee34158b8fd799e4a7c633d62f455df532f44a7db7f0be5082b9205",
-    "scripts/plan_team.py": "6a6dd08406d90657e934bfdf104e205384eaa45bf1626a699003040519718918"
+    "scripts/plan_team.py": "6a6dd08406d90657e934bfdf104e205384eaa45bf1626a699003040519718918",
+    "scripts/prepare_review.py": "dded2479ec9e97880974e061be42941fafc302c6e89ed7193e65e3b1fe75520b",
+    "scripts/self_check.py": "3cc094fe60d9d926f48f933f52d001022144b249e15464fa25c802415cdea27b"
   }
 }
