@@ -1,17 +1,24 @@
-"""Offline integrity and behavior checks for the packaged AI Team Skill."""
+"""Offline package consistency checks; not a signature or a trusted runtime."""
 
-from __future__ import annotations
+# sys is built-in; no package-resolved import may precede the path adjustment.
+import sys
+
+# Do not import an unlisted scripts/json.py (or another stdlib lookalike)
+# before the package has been checked. Python 3.11+ omits this path with -P/-I.
+if __name__ == "__main__" and not sys.flags.safe_path:
+    del sys.path[0]
 
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
-import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+# Keep lexical paths: resolve() would conceal a linked package or entry.
+ROOT = Path(__file__).absolute().parents[1]
 SCRIPTS = ROOT / "scripts"
 
 
@@ -43,18 +50,92 @@ def run_python(script: Path, *arguments: str, stdin: object | None = None) -> su
     )
 
 
+def _checked_stat(path: Path) -> os.stat_result:
+    status = path.lstat()
+    if stat.S_ISLNK(status.st_mode) or (
+        getattr(status, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    ):
+        fail(f"package contains a link or reparse point: {path}")
+    return status
+
+
+def _package_files() -> set[str]:
+    for ancestor in (*reversed(ROOT.parents), ROOT):
+        if not stat.S_ISDIR(_checked_stat(ancestor).st_mode):
+            fail("package root or its parent is not a directory")
+    found: set[str] = set()
+    pending = [ROOT]
+    while pending:
+        directory = pending.pop()
+        for entry in directory.iterdir():
+            status = _checked_stat(entry)
+            if stat.S_ISDIR(status.st_mode):
+                pending.append(entry)
+            elif stat.S_ISREG(status.st_mode):
+                found.add(entry.relative_to(ROOT).as_posix())
+            else:
+                fail(f"package contains a non-regular file: {entry}")
+    return found
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            fail(f"package manifest has a duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _check_manifest_path(relative: str) -> None:
+    # Accept only unambiguous slash-separated relative names on every host.
+    parts = relative.split("/")
+    if (
+        not relative
+        or any(part in ("", ".", "..") or part.endswith((" ", ".")) for part in parts)
+        or re.search(r'[\\:<>"|?*\x00-\x1f]', relative)
+    ):
+        fail(f"package manifest has an unsafe path: {relative!r}")
+
+
 def check_manifest() -> str:
-    manifest_path = ROOT / "package-manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("name") != "ai-team" or not isinstance(manifest.get("version"), str):
+    # Inspect all entries before opening the manifest, including links, hidden
+    # files and __pycache__. No unlisted Python cache is exempt from this check.
+    actual = _package_files()
+    manifest_name = "package-manifest.json"
+    if manifest_name not in actual:
+        fail("package manifest is missing")
+    manifest = json.loads(
+        (ROOT / manifest_name).read_text(encoding="utf-8"),
+        object_pairs_hook=_unique_json_object,
+    )
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("name") != "ai-team"
+        or not isinstance(manifest.get("version"), str)
+        or not manifest["version"]
+    ):
         fail("package manifest name/version is invalid")
     files = manifest.get("files")
     if not isinstance(files, dict) or not files:
         fail("package manifest file map is missing")
+    names: set[str] = {manifest_name.casefold()}
     for relative, expected in files.items():
-        target = (ROOT / relative).resolve()
-        if not target.is_relative_to(ROOT) or target.is_symlink() or not target.is_file():
-            fail(f"manifest target is missing or unsafe: {relative}")
+        _check_manifest_path(relative)
+        if relative.casefold() in names:
+            fail(f"package manifest has a duplicate or aliased path: {relative}")
+        names.add(relative.casefold())
+        if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+            fail(f"package manifest hash is invalid: {relative}")
+    wanted = set(files) | {manifest_name}
+    missing, extra = wanted - actual, actual - wanted
+    if missing:
+        fail(f"package files are missing: {', '.join(sorted(missing))}")
+    if extra:
+        fail(f"unexpected package files (Python caches are not exempt): {', '.join(sorted(extra))}")
+    for relative, expected in files.items():
+        target = ROOT / relative
         if sha256(target.read_bytes()).hexdigest() != expected:
             fail(f"manifest hash mismatch: {relative}")
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -136,14 +217,33 @@ def check_review_preparation() -> int:
     if result.returncode != 0:
         fail("host review preparation failed")
     prepared = json.loads(result.stdout)
-    if prepared.get("ready_for_review") is not True or prepared.get("artifact") != payload:
-        fail("host review preparation changed the source")
+    metadata = {key: value for key, value in payload.items() if key != "content"}
+    if prepared.get("ready_for_review") is not True or prepared.get("artifact") != metadata:
+        fail("host review preparation changed artifact metadata")
+    if "content" in prepared or "保留原文" in json.dumps(prepared, ensure_ascii=False):
+        fail("host review preparation echoed the source without permission")
     if prepared.get("content_sha256") != sha256(payload["content"].encode("utf-8")).hexdigest():
         fail("host review preparation has an incorrect body hash")
+    expected_artifact = "\0".join(str(payload[key]) for key in (
+        "id", "assignment_id", "author_id", "version", "content",
+    ))
+    if prepared.get("artifact_sha256") != sha256(expected_artifact.encode("utf-8")).hexdigest():
+        fail("host review preparation has an incorrect artifact hash")
+    echoed = run_python(SCRIPTS / "prepare_review.py", "--include-content", stdin=payload)
+    included = json.loads(echoed.stdout)
+    if (
+        echoed.returncode != 0
+        or included.get("artifact") != payload
+        or included.get("content_sha256") != prepared["content_sha256"]
+        or included.get("artifact_sha256") != prepared["artifact_sha256"]
+    ):
+        fail("explicit review source echo changed the source or hashes")
     revised = run_python(SCRIPTS / "prepare_review.py", stdin={**payload, "version": 2})
     if revised.returncode != 0:
         fail("revised review preparation failed")
     second = json.loads(revised.stdout)
+    if second.get("artifact") != {**metadata, "version": 2} or "保留原文" in json.dumps(second, ensure_ascii=False):
+        fail("revised review preparation changed metadata or echoed the source")
     if second.get("content_sha256") != prepared["content_sha256"] or second.get("artifact_sha256") == prepared["artifact_sha256"]:
         fail("review preparation confused the body hash and version hash")
     unavailable = run_python(SCRIPTS / "prepare_review.py", "--hash-unavailable")

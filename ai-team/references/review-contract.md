@@ -15,7 +15,11 @@
 - `content_sha256`：仅对正文的 UTF-8 字节计算 SHA-256，用于核对原文是否变化。
 - `artifact_sha256`：沿用 CCRL 的 `artifact_sha256(Artifact)`，摘要还包括成果编号、子任务编号、作者和版本。Review Memo 的 `reviewed_sha256` 对应这个值，不拿正文摘要替代它。使用已有 CCRL 时继续由程序计算和校验，不改变旧格式。
 
-可选工具：主助手将 `{"id":"成果编号","assignment_id":"子任务编号","author_id":"作者身份","version":1,"content":"完整原正文"}` 经标准输入送入 `python -B <skill-dir>/scripts/prepare_review.py`。这些字段由助手整理，用户不用填写。工具复用 CCRL 算法，返回原正文、两种摘要及 `ready_for_review`；整个 JSON 最多 120 KiB，不读取任意路径、不写文件、不启动 Agent。JSON 转义可以变化，解析后的正文字符不得变化。只有退出码为 0 且 `ready_for_review=true`，才可继续交给审阅者；这只表示版本准备完成，不表示内容正确或审阅通过。
+可选工具：主助手将 `{"id":"成果编号","assignment_id":"子任务编号","author_id":"作者身份","version":1,"content":"完整原正文"}` 经标准输入送入 `python -B <skill-dir>/scripts/prepare_review.py`。这些字段由助手整理，用户不用填写。工具复用 CCRL 算法，默认返回不含 `content` 的 `artifact` 身份与版本信息、两种摘要及 `ready_for_review`；整个 JSON 最多 120 KiB，不读取任意路径、不写文件、不启动 Agent。只有退出码为 0 且 `ready_for_review=true`，才可继续交给审阅者；这只表示版本准备完成，不表示内容正确或审阅通过。
+
+主助手在内存中保留输入的完整原文，核对返回的身份、版本和摘要，再将这份原文连同摘要交给审阅者。默认不在工具输出中重复正文，不能因此省略审阅者需要的全文。换行、空格和字符都必须保留；不要从终端截断输出拼回正文，也不要重新读可能已经变动的文件来替代已核对版本。
+
+只有明确需要回显原文时，才使用 `--include-content`（Python 用法为 `prepare_review_input(payload, include_content=True)`）。该选项在成功时返回完整 `artifact`，可能使正文进入终端和工具调用记录；使用前确认这些记录的保存范围合适。默认成功输出及失败说明不回显输入正文；报错不代表可以把原始请求附进错误记录。主助手也不要把正文拼在命令参数、调试打印或报错附件中。身份字段只放不含业务正文的短编号，因为这些字段会出现在元数据中。
 
 没有获准使用的计算能力时，明确记录 `needs_version_check`，保留草稿与已有意见，停止以完整审阅结果交付。不能让模型编造 SHA-256，不能把旧摘要、旧记忆或“不再报错”当作本次核对成功。`--hash-unavailable` 可供主助手记录此状态，退出码为 2 且不返回摘要；没有脚本运行能力时直接如实说明，不必强行运行。补齐条件后重新准备本次版本；超出原有授权才询问用户。
 
