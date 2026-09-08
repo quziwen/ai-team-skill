@@ -95,6 +95,7 @@ class _ReviewBinding:
     artifact: Artifact
     reviewer_id: str
     feedback: ReviewFeedback
+    task: str
 
 
 class AgentRunner(Protocol):
@@ -654,6 +655,16 @@ class RunnerBackend(AgentBackend):
         self._runner = runner
         self._issued_call_ids: set[str] = set()
         self._review_binding_by_assignment_id: dict[str, _ReviewBinding] = {}
+        self._produced_task_by_assignment_id: dict[str, str] = {}
+
+    def _check_task(self, assignment_id: str, task: str) -> None:
+        """Reject rewritten requirements before issuing another request."""
+        original = self._produced_task_by_assignment_id.get(assignment_id)
+        binding = self._review_binding_by_assignment_id.get(assignment_id)
+        if original is None and binding is not None:
+            original = binding.task
+        if original is not None and task != original:
+            raise RunnerContractError("任务原文不一致；先纠正传递内容，再继续处理")
 
     def _new_call_id(self) -> str:
         while True:
@@ -690,7 +701,14 @@ class RunnerBackend(AgentBackend):
             actor_name=actor.name,
             actor_capabilities=actor.capabilities,
             subject_ids=subject_ids,
-            instructions=_INSTRUCTIONS[operation],
+            instructions=(
+                _INSTRUCTIONS[operation]
+                + " Treat payload.task as the verbatim user task. Assignment goals "
+                "and coordinator notes do not add user requirements. Do not rewrite "
+                "or strengthen the completion criteria. If task copies differ, "
+                "report the input mismatch before judging the disagreement. "
+                "Keep findings concise without omitting evidence or required items."
+            ),
             writing_requirements=PLAIN_CHINESE_REQUIREMENTS,
             payload_json=payload_json,
             payload_sha256=payload_digest,
@@ -777,6 +795,7 @@ class RunnerBackend(AgentBackend):
         # A successful new production starts a fresh review exchange. This lets
         # one backend instance handle later tasks that reuse work-1/work-2.
         self._review_binding_by_assignment_id.pop(assignment.id, None)
+        self._produced_task_by_assignment_id[assignment.id] = task
         return content
 
     def review(
@@ -796,6 +815,7 @@ class RunnerBackend(AgentBackend):
             raise RunnerContractError("待审成果的作者与子任务记录不一致")
         if reviewer.id == artifact.author_id:
             raise RunnerContractError("作者不能审阅自己的成果")
+        self._check_task(assignment.id, task)
         recorded_binding = self._review_binding_by_assignment_id.get(
             assignment.id
         )
@@ -851,6 +871,7 @@ class RunnerBackend(AgentBackend):
             artifact=artifact,
             reviewer_id=reviewer.id,
             feedback=feedback,
+            task=task,
         )
         return feedback
 
@@ -866,6 +887,7 @@ class RunnerBackend(AgentBackend):
         _required_text(task, "task")
         if author.id != artifact.author_id:
             raise RunnerContractError("只有成果作者本人可以回应审阅意见")
+        self._check_task(artifact.assignment_id, task)
         raw = self._invoke(
             AgentOperation.RESPOND,
             author,
@@ -953,7 +975,10 @@ class RunnerBackend(AgentBackend):
             AgentOperation.CONFIRM,
             reviewer,
             (artifact.id,),
-            {"artifact": artifact, "feedback": feedback, "response": response},
+            {
+                "artifact": artifact, "feedback": feedback,
+                "response": response, "task": binding.task,
+            },
         )
         _require_exact_fields(raw, ("resolved", "comment"), "confirm ")
         resolved = raw["resolved"]
@@ -980,6 +1005,7 @@ class RunnerBackend(AgentBackend):
             raise RunnerContractError("第三方判断者不能是争议双方")
         if cycle.status != "disputed":
             raise RunnerContractError("只有确认存在分歧的审阅记录才能交给第三方")
+        self._check_task(cycle.assignment_id, task)
         finding_ids = tuple(
             item.finding_id
             for item in cycle.reviewer_reassessment_record.finding_reassessments
@@ -1079,6 +1105,7 @@ class RunnerBackend(AgentBackend):
         assignment_by_id: dict[str, Assignment] = {}
         for assignment in assignments:
             _validate_assignment(assignment)
+            self._check_task(assignment.id, task)
             assignment_by_id[assignment.id] = assignment
         if len(assignment_by_id) != len(assignments):
             raise RunnerContractError("合并输入包含重复的子任务编号")

@@ -37,8 +37,7 @@ class AITeam:
         self.review_capability = review_capability or CCRLReviewCapability()
 
     def run(self, task: str) -> RunResult:
-        task = task.strip()
-        if not task:
+        if not task.strip():
             raise ValueError("任务不能为空")
 
         events: list[str] = ["received"]
