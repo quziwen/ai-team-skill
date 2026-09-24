@@ -253,6 +253,35 @@ def check_review_preparation() -> int:
     return 3
 
 
+def check_delivery_verification() -> int:
+    artifact = {
+        "id": "fixture-result", "assignment_id": "fixture-task", "author_id": "fixture-a",
+        "version": 1, "content": "1 + 2 = 3",
+    }
+    digest = sha256("\0".join(str(artifact[k]) for k in (
+        "id", "assignment_id", "author_id", "version", "content"
+    )).encode("utf-8")).hexdigest()
+    package = {
+        "id": "fixture-rp", "assignment_id": artifact["assignment_id"],
+        "artifact_id": artifact["id"], "artifact_version": 1,
+        "artifact_sha256": digest, "author_id": artifact["author_id"],
+        "reviewer_id": "fixture-b", "scope": "local fixture",
+        "acceptance_criteria": ["arithmetic"],
+    }
+    payload = {"artifact": artifact, "review_package": package,
+               "checks": [{"criterion": "arithmetic", "method": "sum", "expression": "1 + 2 = 3"}]}
+    checked = run_python(SCRIPTS / "check_delivery.py", stdin=payload)
+    receipt = json.loads(checked.stdout)
+    if checked.returncode != 0 or receipt.get("checks_passed") is not True or receipt.get("proves_task_completion") is not False:
+        fail("delivery verification did not preserve its local-check boundary")
+    package["acceptance_criteria"].append("missing requirement")
+    stopped = run_python(SCRIPTS / "check_delivery.py", stdin=payload)
+    receipt = json.loads(stopped.stdout)
+    if stopped.returncode != 2 or receipt.get("blocking_criteria") != ["missing requirement"]:
+        fail("delivery verification treated a missing requirement as passed")
+    return 2
+
+
 def main() -> int:
     try:
         version = check_manifest()
@@ -260,6 +289,7 @@ def main() -> int:
         modes = check_planner_modes()
         section_count = check_mock_output()
         preparation_count = check_review_preparation()
+        delivery_count = check_delivery_verification()
     except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError, subprocess.SubprocessError) as exc:
         print(json.dumps({"status": "FAIL", "error": str(exc)}, ensure_ascii=True))
         return 1
@@ -270,6 +300,7 @@ def main() -> int:
         "planner_modes": modes,
         "mock_sections": section_count,
         "review_preparation_checks": preparation_count,
+        "delivery_verification_checks": delivery_count,
         "real_agents_started": False,
         "acceptance_boundary": "local package check only",
     }, ensure_ascii=True, sort_keys=True))
