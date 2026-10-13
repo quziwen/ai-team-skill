@@ -111,6 +111,14 @@ def render_markdown(
                 f"  - 原审阅者确认：{cycle.reviewer_reassessment_record.comment}"
             )
 
+    for verification in result.delivery_verifications:
+        title = next(item.title for item in result.assignments if item.id == verification.assignment_id)
+        for check in verification.acceptance_status:
+            label = {"passed": "通过", "pending": "未验证", "failed": "不通过"}[check.status]
+            lines.append(
+                f"- {title} v{verification.artifact_version}｜{check.criterion}：{label}；{check.evidence}"
+            )
+
     lines.extend(("", "## 讨论结论"))
     closed_findings = sum(
         item.decision in {"satisfied", "withdrawn"}
@@ -144,7 +152,11 @@ def render_markdown(
         lines.append("- 所有审阅均已确认。")
 
     lines.extend(("", "## 未解决分歧"))
-    if not result.unresolved_disagreements:
+    blocking_checks = [
+        check for verification in result.delivery_verifications
+        for check in verification.acceptance_status if check.status != "passed"
+    ]
+    if not result.unresolved_disagreements and not blocking_checks:
         lines.append("无。")
     else:
         for item in result.unresolved_disagreements:
@@ -157,10 +169,16 @@ def render_markdown(
                     f"  - 需要你决定：{item.required_user_input}",
                 )
             )
+    for check in blocking_checks:
+        kind = "检查未通过" if check.status == "failed" else "证据缺口"
+        lines.append(f"- {kind}：{check.criterion}；{check.evidence} {check.impact}")
 
     lines.extend(("", "## 最终成果", ""))
     if result.final_result is None:
-        lines.append("暂未生成；等待上述事项明确后再统一合并。")
+        if result.status == "needs_verification":
+            lines.append("暂未生成；先补齐或更正上述必要检查，已有阶段成果保留。")
+        else:
+            lines.append("暂未生成；等待上述事项明确后再统一合并。")
     else:
         lines.append(result.final_result)
     return "\n".join(lines)

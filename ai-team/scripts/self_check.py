@@ -146,6 +146,11 @@ def check_manifest() -> str:
     )
     if not match or match.group(1) != manifest["version"]:
         fail("SKILL.md version does not match package manifest")
+    installation = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+    heading = installation.splitlines()[0] if installation else ""
+    match = re.fullmatch(r"# AI Team ([0-9]+\.[0-9]+\.[0-9]+)：安装和试用", heading)
+    if not match or match.group(1) != manifest["version"]:
+        fail("INSTALL.md version does not match package manifest")
     return manifest["version"]
 
 
@@ -206,6 +211,39 @@ def check_mock_output() -> int:
     if any(heading not in result.stdout for heading in headings):
         fail("Mock demo is missing a required output section")
     return len(headings)
+
+
+def check_task_routing() -> int:
+    request = tool_request(3)
+    request["task_profile"] = {
+        "basis": "Public deterministic fixture.", "clarity": "clear", "complexity": "routine",
+        "consequence": "low", "verification": "objective", "data_scope": "public",
+    }
+    tool = request["tools"][0]
+    tool["can_select_model"] = True
+    tool["models"].append({
+        "id": "fixture-strong", "capabilities": ["general", "high_impact_review"],
+        "evidence": "measured", "cost_rank": 3,
+    })
+    tool["current_model_ids"].append("fixture-strong")
+    for expected, changes in (
+        ("fixture-model", {}),
+        ("fixture-strong", {"consequence": "high"}),
+        (None, {"data_scope": "business", "allowed_tool_ids": []}),
+    ):
+        request["task_profile"].update(changes)
+        result = run_python(SCRIPTS / "plan_team.py", stdin=request)
+        if result.returncode != 0:
+            fail("task routing fixture failed to run")
+        payload = json.loads(result.stdout)
+        if payload.get("plan_only") is not True:
+            fail("task routing did not remain plan-only")
+        if expected is None:
+            if payload.get("mode") != "unavailable" or payload.get("roles") != []:
+                fail("task routing ignored the allowed-tool restriction")
+        elif {role["model_id"] for role in payload.get("roles", [])} != {expected}:
+            fail("task routing ignored cost or review requirements")
+    return 3
 
 
 def check_review_preparation() -> int:
@@ -282,6 +320,43 @@ def check_delivery_verification() -> int:
     return 2
 
 
+def check_delivery_workflow() -> int:
+    # The package has already passed manifest and source checks at this point.
+    sys.path.insert(0, str(SCRIPTS))
+    from ai_team.agents import MockBackend
+    from ai_team.contracts import ReviewFeedback
+    from ai_team.workflow import AITeam
+
+    class FixtureBackend(MockBackend):
+        def __init__(self, body: str) -> None:
+            super().__init__("normal")
+            self.body = body
+
+        def produce(self, agent, assignment, task):
+            return self.body if assignment.id == "work-1" else "Local fixture."
+
+        def review(self, reviewer, artifact, assignment, task):
+            return ReviewFeedback("no_findings", "Local scripted agreement.")
+
+    def checker(artifact, package):
+        return [{"criterion": "arithmetic", "method": "sum", "expression": artifact.content}]
+
+    for body, criteria, expected, merge_calls in (
+        ("1 + 2 = 3", ("arithmetic",), "completed", 1),
+        ("1 + 2 = 4", ("arithmetic",), "needs_verification", 0),
+        ("1 + 2 = 3", ("arithmetic", "source verified"), "needs_verification", 0),
+    ):
+        backend = FixtureBackend(body)
+        result = AITeam(backend).run(
+            "Local arithmetic fixture only",
+            delivery_requirements={"work-1": criteria, "work-2": ()},
+            delivery_checker=checker,
+        )
+        if result.status != expected or backend.integrate_calls != merge_calls:
+            fail("delivery workflow ignored necessary checks")
+    return 3
+
+
 def main() -> int:
     try:
         version = check_manifest()
@@ -290,6 +365,8 @@ def main() -> int:
         section_count = check_mock_output()
         preparation_count = check_review_preparation()
         delivery_count = check_delivery_verification()
+        routing_count = check_task_routing()
+        workflow_count = check_delivery_workflow()
     except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError, subprocess.SubprocessError) as exc:
         print(json.dumps({"status": "FAIL", "error": str(exc)}, ensure_ascii=True))
         return 1
@@ -301,6 +378,8 @@ def main() -> int:
         "mock_sections": section_count,
         "review_preparation_checks": preparation_count,
         "delivery_verification_checks": delivery_count,
+        "task_routing_checks": routing_count,
+        "delivery_workflow_checks": workflow_count,
         "real_agents_started": False,
         "acceptance_boundary": "local package check only",
     }, ensure_ascii=True, sort_keys=True))

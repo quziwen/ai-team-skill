@@ -9,6 +9,7 @@ use the local ``MockBackend`` by default.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
+from contextlib import nullcontext
 from enum import Enum
 from hashlib import sha256
 import json
@@ -17,6 +18,7 @@ import unicodedata
 from uuid import uuid4
 
 from .agents import AgentBackend
+from .execution import TaskCallBudget
 from .contracts import (
     AgentProfile,
     ArbitrationDecision,
@@ -47,6 +49,16 @@ PLAIN_CHINESE_REQUIREMENTS: tuple[str, ...] = (
     "优先写清谁做什么、需要什么、怎样检查、失败后怎么办；能用具体动作时少用泛化表达。",
     "不要把门禁、门、链、层、线等词当作抽象比喻；直接说明实际对象和动作。",
     "只返回任务要求的内容，不向用户展示内部诊断、改写草稿、自审过程或打磨报告。",
+)
+
+# Guidance included in the request digest, not automatic source authentication.
+EVIDENCE_REQUIREMENTS = (
+    "只完成本次交付，不再委派其他 Agent，也不扩大权限。"
+    "独立初稿完成前不查看另一作者结论。按具体主张说明来源、版本和检查方法；"
+    "转载、同一检索片段及其他 Agent 的转述不能充当多份独立证据，来源不明就说明未知。"
+    "同一资料的独立重算仍可用于检查计算。保留原结论，发现事实或推理错误应更正并说明依据；"
+    "不为每轮凑新材料，不按人数或人为分数判定正确。停止讨论不等于问题解决；"
+    "缺少必要依据就保留未解决事项，不能因额度用完、没有新证据或大家同意而宣布通过。"
 )
 
 
@@ -86,6 +98,7 @@ class AgentCallResult:
     call_id: str
     request_sha256: str
     output_text: str
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -651,8 +664,9 @@ def _request_state(request: AgentCallRequest) -> tuple[object, ...]:
 class RunnerBackend(AgentBackend):
     """Adapt one strict ``AgentRunner`` to the existing six backend actions."""
 
-    def __init__(self, runner: AgentRunner) -> None:
+    def __init__(self, runner: AgentRunner, *, call_budget: TaskCallBudget | None = None) -> None:
         self._runner = runner
+        self._call_budget = call_budget
         self._issued_call_ids: set[str] = set()
         self._review_binding_by_assignment_id: dict[str, _ReviewBinding] = {}
         self._produced_task_by_assignment_id: dict[str, str] = {}
@@ -708,6 +722,7 @@ class RunnerBackend(AgentBackend):
                 "or strengthen the completion criteria. If task copies differ, "
                 "report the input mismatch before judging the disagreement. "
                 "Keep findings concise without omitting evidence or required items."
+                + " " + EVIDENCE_REQUIREMENTS
             ),
             writing_requirements=PLAIN_CHINESE_REQUIREMENTS,
             payload_json=payload_json,
@@ -745,6 +760,20 @@ class RunnerBackend(AgentBackend):
         expected_state = _request_state(request)
         expected_call_id = request.call_id
         expected_request_sha256 = request.request_sha256
+        attempt = (
+            self._call_budget.attempt(
+                task=payload.get("task"), actor_id=actor.id, operation=operation.value,
+                call_id=request.call_id, request_sha256=request.request_sha256,
+                content_sha256=request.payload_sha256,
+            ) if self._call_budget is not None else nullcontext()
+        )
+        with attempt:
+            return self._invoke_checked(request, expected_state, expected_call_id, expected_request_sha256)
+
+    def _invoke_checked(
+        self, request: AgentCallRequest, expected_state: tuple[object, ...],
+        expected_call_id: str, expected_request_sha256: str,
+    ) -> dict[str, Any]:
         result = self._runner.invoke(request)
         try:
             current_state = _request_state(request)
@@ -758,6 +787,8 @@ class RunnerBackend(AgentBackend):
             raise RunnerContractError("Agent Runner 修改了调用请求")
         if not isinstance(result, AgentCallResult):
             raise RunnerContractError("Agent Runner 必须返回 AgentCallResult")
+        if self._call_budget is not None:
+            self._call_budget.check_reported_session(request.actor_id, result.session_id)
         if type(result.call_id) is not str or result.call_id != expected_call_id:
             raise RunnerContractError("Agent Runner 返回了错误的 call_id")
         if (

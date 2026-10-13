@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 
-RunStatus = Literal["completed", "needs_user_decision"]
+RunStatus = Literal["completed", "needs_user_decision", "needs_verification"]
 InitialVerdict = Literal["no_findings", "changes_requested", "disputed"]
 CycleStatus = Literal["confirmed", "disputed", "arbitrated", "unresolved"]
 ReviewMemoResult = Literal["findings", "no_findings"]
@@ -247,6 +247,33 @@ class IntegrationResult:
 
 
 @dataclass(frozen=True)
+class DeliveryCheck:
+    criterion: str
+    status: Literal["passed", "pending", "failed"]
+    evidence: str
+    method: str
+    source: str
+    source_sha256: str | None
+    impact: str
+
+
+@dataclass(frozen=True)
+class DeliveryVerification:
+    assignment_id: str
+    artifact_id: str
+    artifact_version: int
+    artifact_sha256: str
+    review_package_id: str
+    acceptance_status: tuple[DeliveryCheck, ...]
+
+    @property
+    def checks_passed(self) -> bool:
+        return bool(self.acceptance_status) and all(
+            item.status == "passed" for item in self.acceptance_status
+        )
+
+
+@dataclass(frozen=True)
 class RunResult:
     task: str
     status: RunStatus
@@ -259,6 +286,7 @@ class RunResult:
     final_result: str | None
     integrator_id: str | None
     events: tuple[str, ...]
+    delivery_verifications: tuple[DeliveryVerification, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Return a serializable form for tests or future adapters."""

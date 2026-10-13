@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, replace
 
 from .agents import AgentBackend, CapabilityRouter, MockBackend
 from .ccrl import (
@@ -13,13 +14,17 @@ from .ccrl import (
     validate_reassessment,
     validate_review_memo,
     validate_review_package,
+    artifact_sha256,
 )
 from .contracts import (
     ArbitrationDecision,
     Artifact,
     Assignment,
+    DeliveryCheck,
+    DeliveryVerification,
     IntegrationResult,
     ReviewCycle,
+    ReviewPackage,
     RunResult,
     UnresolvedDisagreement,
 )
@@ -36,13 +41,22 @@ class AITeam:
         self.router = router or CapabilityRouter()
         self.review_capability = review_capability or CCRLReviewCapability()
 
-    def run(self, task: str) -> RunResult:
+    def run(
+        self,
+        task: str,
+        *,
+        delivery_requirements: Mapping[str, tuple[str, ...]] | None = None,
+        delivery_checker: Callable[[Artifact, ReviewPackage], list[dict]] | None = None,
+    ) -> RunResult:
         if not task.strip():
             raise ValueError("任务不能为空")
 
         events: list[str] = ["received"]
         assignments = self.router.plan(task)
         events.append("planned")
+        requirements = _freeze_delivery_requirements(
+            delivery_requirements, assignments, delivery_checker
+        )
 
         artifacts: list[Artifact] = []
         latest_by_assignment: dict[str, Artifact] = {}
@@ -284,6 +298,28 @@ class AITeam:
                 events=tuple(events),
             )
 
+        verifications = _verify_deliveries(
+            final_artifacts, tuple(final_cycles), requirements, delivery_checker
+        )
+        if verifications:
+            events.append("delivery_checked")
+        if any(not item.checks_passed for item in verifications):
+            events.append("needs_verification")
+            return RunResult(
+                task=task,
+                status="needs_verification",
+                assignments=assignments,
+                artifacts=tuple(artifacts),
+                review_cycles=tuple(final_cycles),
+                arbitrations=tuple(arbitrations),
+                unresolved_disagreements=tuple(),
+                final_artifact_ids=tuple(),
+                final_result=None,
+                integrator_id=None,
+                events=tuple(events),
+                delivery_verifications=verifications,
+            )
+
         integrator = self.router.select(("synthesis",), exclude=set())
         integration = self.backend.integrate(
             integrator,
@@ -339,7 +375,75 @@ class AITeam:
             final_result=integration.content,
             integrator_id=integrator.id,
             events=tuple(events),
+            delivery_verifications=verifications,
         )
+
+
+def _freeze_delivery_requirements(requirements, assignments, checker):
+    if requirements is None:
+        if checker is not None:
+            raise ValueError("检查方法必须同时提供本次必要要求")
+        return None
+    if not isinstance(requirements, Mapping) or set(requirements) != {
+        item.id for item in assignments
+    }:
+        raise ValueError("必须逐项说明每个子任务的必要检查要求")
+    if checker is not None and not callable(checker):
+        raise ValueError("成果检查方法必须可调用")
+    frozen = {}
+    for assignment_id, criteria in requirements.items():
+        if (
+            type(criteria) is not tuple or len(criteria) > 64
+            or any(type(item) is not str or not item.strip() or "\0" in item for item in criteria)
+            or len(set(criteria)) != len(criteria)
+        ):
+            raise ValueError("必要要求必须是无重复的非空文字；无客观检查时显式使用空元组")
+        frozen[assignment_id] = criteria
+    return frozen
+
+
+def _verify_deliveries(artifacts, cycles, requirements, checker):
+    if requirements is None:
+        return tuple()
+    # verification reuses the Phase 2 AcceptanceCheck type; import after modules
+    # have loaded to preserve the existing project -> workflow dependency.
+    from .verification import VerificationInputError, verify_delivery
+
+    cycles_by_assignment = {item.assignment_id: item for item in cycles}
+    results = []
+    for artifact in artifacts:
+        criteria = requirements[artifact.assignment_id]
+        if not criteria:
+            continue
+        original = cycles_by_assignment[artifact.assignment_id].review_package
+        package = replace(
+            original,
+            id=f"delivery-{artifact.id}",
+            artifact_id=artifact.id,
+            artifact_version=artifact.version,
+            artifact_sha256=artifact_sha256(artifact),
+            acceptance_criteria=criteria,
+        )
+        try:
+            checks = [] if checker is None else checker(artifact, package)
+            receipt = verify_delivery({
+                "artifact": asdict(artifact),
+                "review_package": asdict(package),
+                "checks": checks,
+            })
+            checked = tuple(DeliveryCheck(**item) for item in receipt["acceptance_status"])
+        except (VerificationInputError, OSError, ValueError, TypeError):
+            # Do not echo callback exceptions, source bodies or stale receipts.
+            checked = tuple(DeliveryCheck(
+                criterion, "pending", "检查输入或执行不合要求，尚未取得有效检查结果。",
+                "unverified", "未取得有效检查依据", None,
+                "核对检查方法、依据和当前成果版本后再继续；不能宣布全部完成。",
+            ) for criterion in criteria)
+        results.append(DeliveryVerification(
+            artifact.assignment_id, artifact.id, artifact.version,
+            package.artifact_sha256, package.id, checked,
+        ))
+    return tuple(results)
 
 
 def run(task: str) -> RunResult:

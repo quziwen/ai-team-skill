@@ -83,6 +83,52 @@ class AgentToolOption:
 
 
 @dataclass(frozen=True)
+class TaskProfile:
+    """Host assessment for this task, not a model probe or permission grant."""
+
+    basis: str
+    clarity: Literal["clear", "ambiguous", "unknown"] = "unknown"
+    complexity: Literal["routine", "complex", "unknown"] = "unknown"
+    consequence: Literal["low", "high", "unknown"] = "unknown"
+    verification: Literal["objective", "judgment", "unknown"] = "unknown"
+    data_scope: Literal["public", "business", "unknown"] = "unknown"
+    allowed_tool_ids: tuple[str, ...] | None = None
+    preferred_reasoning_tools: tuple[str, ...] = ()
+    preferred_execution_tools: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.basis) is not str or not self.basis.strip():
+            raise ValueError("任务判断需要简短依据，不填写原始业务数据")
+        for field, allowed in (
+            ("clarity", ("clear", "ambiguous", "unknown")),
+            ("complexity", ("routine", "complex", "unknown")),
+            ("consequence", ("low", "high", "unknown")),
+            ("verification", ("objective", "judgment", "unknown")),
+            ("data_scope", ("public", "business", "unknown")),
+        ):
+            if getattr(self, field) not in allowed:
+                raise ValueError(f"任务判断 {field} 的取值无效")
+        for field in ("allowed_tool_ids", "preferred_reasoning_tools", "preferred_execution_tools"):
+            value = getattr(self, field)
+            if field == "allowed_tool_ids" and value is None:
+                continue
+            if type(value) is not tuple or any(type(x) is not str or not x.strip() for x in value):
+                raise ValueError(f"{field} 必须是工具编号列表")
+            if len(set(value)) != len(value):
+                raise ValueError(f"{field} 不能有重复编号")
+
+    def extra_capabilities(self) -> tuple[str, ...]:
+        required = []
+        if self.clarity != "clear" or self.complexity != "routine":
+            required.append("advanced_reasoning")
+        if self.consequence != "low":
+            required.append("high_impact_review")
+        if self.verification != "objective":
+            required.append("judgment_review")
+        return tuple(required)
+
+
+@dataclass(frozen=True)
 class RoleSuggestion:
     agent_id: str
     job: str
@@ -126,13 +172,16 @@ def suggest_team(
     *,
     independent_sessions: bool,
     max_parallel_agents: int = 1,
+    task_profile: TaskProfile | None = None,
 ) -> TeamSuggestion:
     """Compatibility API: a single host reporting full independent sessions."""
     tool = AgentToolOption(
         "current-tool", options, "native", independent_sessions,
         3 if independent_sessions else 0, max_parallel_agents, True,
     )
-    return suggest_team_for_tools(task, (tool,), max_parallel_agents=max_parallel_agents)
+    return suggest_team_for_tools(
+        task, (tool,), max_parallel_agents=max_parallel_agents, task_profile=task_profile,
+    )
 
 
 def suggest_team_for_tools(
@@ -140,6 +189,7 @@ def suggest_team_for_tools(
     tools: tuple[AgentToolOption, ...],
     *,
     max_parallel_agents: int = 1,
+    task_profile: TaskProfile | None = None,
 ) -> TeamSuggestion:
     """Suggest compatible tool/model pairs without invoking any of them."""
     if type(task) is not str or not task.strip():
@@ -150,12 +200,35 @@ def suggest_team_for_tools(
         raise ValueError("工具列表格式错误")
     if len({tool.id for tool in tools}) != len(tools):
         raise ValueError("工具编号重复")
+    if task_profile is not None and type(task_profile) is not TaskProfile:
+        raise ValueError("任务判断格式错误")
 
     limitations: list[str] = []
+    extras = task_profile.extra_capabilities() if task_profile else ()
+    if task_profile:
+        if task_profile.data_scope != "public" and task_profile.allowed_tool_ids is None:
+            return TeamSuggestion("unavailable", (), 1, "current_assistant", (
+                "业务数据或数据范围未明，尚未说明哪些工具可以处理本次材料；不自动安排，也不转给当前助手自查。",
+            ))
+        limitations.append(
+            "任务判断由主助手依据当前要求填写；能力标签和工具范围是输入声明，不是自动认证或数据隔离。"
+        )
+        if extras:
+            limitations.append("本次工作及互审要求补充能力：" + "、".join(extras) + "；未知条件不按低难度或低风险处理。")
+        if task_profile.complexity == "routine" and task_profile.verification == "objective":
+            limitations.append("重复整理、计算等有明确规则的部分优先用已获准的本地程序处理；本建议不会执行程序或省略审阅。")
+        if task_profile.data_scope != "public" or task_profile.allowed_tool_ids is not None:
+            limitations.append(
+                "工具范围同时适用于作者、审阅者和第三方。current_assistant 只表示负责协调合并，不授予接收原始数据的权限；"
+                "超出当前助手可读范围的正文须在获准工具内核对和整理，只回传获准的必要摘要，依据不足则保留未验证事项。"
+            )
     candidates: list[tuple[AgentToolOption, ModelOption]] = []
     has_callable_tool = False
     has_session_tool = False
     for tool in tools:
+        if task_profile and task_profile.allowed_tool_ids is not None and tool.id not in task_profile.allowed_tool_ids:
+            limitations.append(f"{tool.id} 不在本次材料的允许工具中，不参与分工。")
+            continue
         if tool.availability not in ("native", "connected"):
             limitations.append(f"{tool.id} 仅为安装候选或当前不可用，不参与分工。")
             continue
@@ -188,21 +261,36 @@ def suggest_team_for_tools(
 
     if not candidates:
         mode = "self_check_only" if has_callable_tool and not has_session_tool else "unavailable"
-        limitations.append("没有可用于独立互审的工具和模型组合；只能保留当前助手的草稿及自查。")
+        if task_profile:
+            mode = "unavailable"
+            limitations.append("没有符合本次范围的独立互审组合；不自动转移材料或降低要求。")
+        else:
+            limitations.append("没有可用于独立互审的工具和模型组合；只能保留当前助手的草稿及自查。")
         return TeamSuggestion(
             mode, (), 1, "current_assistant", tuple(limitations),
         )
 
     # Reuse the project's existing task split rather than maintain another one.
     assignments = CapabilityRouter().plan(task)
-    requirements = [
+    base_requirements = [
         tuple(dict.fromkeys((*assignment.required_capabilities, "review")))
         for assignment in assignments
     ] + [("arbitration", "review")]
+    requirements = [tuple(dict.fromkeys((*required, *extras))) for required in base_requirements]
     eligible = [
-        [(t, m) for t, m in candidates if set(required).issubset(m.capabilities) or "general" in m.capabilities]
-        for required in requirements
+        [(t, m) for t, m in candidates
+         if (set(required).issubset(m.capabilities) or "general" in m.capabilities)
+         and (task_profile is None or (m.evidence != "unknown" and set(extras).issubset(m.capabilities)))]
+        for required in base_requirements
     ]
+
+    def rank(candidate: tuple[AgentToolOption, ModelOption], index: int, other: str | None = None) -> tuple[object, ...]:
+        original = _rank(candidate[1], requirements[index], other)
+        if task_profile is None:
+            return original
+        preferred = task_profile.preferred_execution_tools if index == 1 else task_profile.preferred_reasoning_tools
+        # Preferences never override ability/evidence or the allowed-tool filter.
+        return (*original[:2], bool(preferred) and candidate[0].id not in preferred, *original[2:])
 
     def fits_capacity(picks: tuple[tuple[AgentToolOption, ModelOption], ...]) -> bool:
         counts = Counter(tool.id for tool, _ in picks)
@@ -214,13 +302,13 @@ def suggest_team_for_tools(
         if not fits_capacity((author_a, author_b)):
             continue
         arbiters = [c for c in eligible[2] if fits_capacity((author_a, author_b, c))]
-        arbiters.sort(key=lambda c: (_rank(c[1], requirements[2], author_a[1].id), c[0].id))
+        arbiters.sort(key=lambda c: (rank(c, 2, author_a[1].id), c[0].id))
         arbiter = arbiters[0] if arbiters else None
         score = (
             arbiter is None,
-            _rank(author_a[1], requirements[0]),
-            _rank(author_b[1], requirements[1], author_a[1].id),
-            _rank(arbiter[1], requirements[2], author_a[1].id) if arbiter else (),
+            rank(author_a, 0),
+            rank(author_b, 1, author_a[1].id),
+            rank(arbiter, 2, author_a[1].id) if arbiter else (),
             author_a[0].id, author_b[0].id,
         )
         if best_score is None or score < best_score:
@@ -229,7 +317,9 @@ def suggest_team_for_tools(
     if best is None:
         limitations.append("无法为两份互补工作安排两个可保留的独立会话，并同时满足工作和审阅能力。")
         available_capacity = sum({tool.id: tool.session_capacity for tool, _ in candidates}.values())
-        mode = "self_check_only" if available_capacity < 2 else "unavailable"
+        mode = "self_check_only" if available_capacity < 2 and task_profile is None else "unavailable"
+        if task_profile:
+            limitations.append("未找到能力依据明确且符合本次工作、互审和工具范围的组合；不以通用模型或低价替代缺失能力。")
         return TeamSuggestion(mode, (), 1, "current_assistant", tuple(limitations))
 
     roles: list[RoleSuggestion] = []
@@ -241,6 +331,8 @@ def suggest_team_for_tools(
             reason += " 依据来自能力说明，未经过本地专项实测。"
         if option.cost_rank is None:
             reason += " 成本未知。"
+        if task_profile:
+            reason += " 已先检查任务要求与工具范围，再按能力依据、本次工具偏好及已知相对成本选择；不是总费用最优保证。"
         roles.append(RoleSuggestion(
             f"author-{index + 1}", assignments[index].title, option.id, required,
             f"author-{2 - index}", "start", reason, tool.id,
@@ -252,7 +344,7 @@ def suggest_team_for_tools(
     else:
         roles.append(RoleSuggestion(
             "arbiter", "逐条判断剩余分歧并说明理由", arbiter[1].id,
-            ("arbitration", "review"), None, "only_if_disputed",
+            requirements[2], None, "only_if_disputed",
             "使用争议双方以外的新会话；模型可以相同，不能沿用争议双方的身份。",
             arbiter[0].id,
         ))
@@ -279,6 +371,19 @@ def main() -> int:
             stream.reconfigure(encoding="utf-8")
     try:
         data = json.load(sys.stdin)
+        raw_profile = data.get("task_profile")
+        task_profile = None
+        if raw_profile is not None:
+            if type(raw_profile) is not dict:
+                raise ValueError("task_profile 必须是 JSON 对象")
+            raw_profile = dict(raw_profile)
+            for field in ("allowed_tool_ids", "preferred_reasoning_tools", "preferred_execution_tools"):
+                if field not in raw_profile or (field == "allowed_tool_ids" and raw_profile[field] is None):
+                    continue
+                if type(raw_profile[field]) is not list:
+                    raise ValueError(f"{field} 必须使用 JSON 数组")
+                raw_profile[field] = tuple(raw_profile[field])
+            task_profile = TaskProfile(**raw_profile)
         tools = []
         for item in data["tools"]:
             current_model_ids = item.get("current_model_ids")
@@ -309,6 +414,7 @@ def main() -> int:
         suggestion = suggest_team_for_tools(
             data["task"], tuple(tools),
             max_parallel_agents=data.get("max_parallel_agents", 1),
+            task_profile=task_profile,
         )
     except (KeyError, TypeError, ValueError) as exc:
         print(f"无法生成分工建议：{exc}", file=sys.stderr)

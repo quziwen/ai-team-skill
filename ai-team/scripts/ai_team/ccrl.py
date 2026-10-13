@@ -21,6 +21,7 @@ from typing import Iterator, Literal, Protocol
 from uuid import uuid4
 
 from .agents import AgentBackend
+from .execution import TaskCallBudget, CallBudgetError
 from .contracts import (
     AgentProfile,
     Artifact,
@@ -688,10 +689,29 @@ class AuthorizedLocalCLIReviewRunner:
         self,
         *,
         approval: ReviewCallApproval | None = None,
+        call_budget: TaskCallBudget | None = None,
+        task: str | None = None,
+        actor_id: str | None = None,
     ) -> None:
         self._approval = approval
+        self._call_budget, self._task, self._actor_id = call_budget, task, actor_id
 
     def invoke(self, plan: ReviewInvocationPlan) -> RawReviewOutput:
+        if self._call_budget is not None:
+            if self._approval is None:
+                raise RealReviewNotAuthorized("真实评审仍需本次单次批准，次数记录不能代替授权")
+            actor = self._call_budget.actor(self._actor_id)
+            if actor.tool_id != plan.provider or actor.session_id is not None:
+                raise CallBudgetError("一次性 CLI 初审不支持该工具绑定或保留会话")
+            digest = review_invocation_sha256(plan)
+            with self._call_budget.attempt(
+                task=self._task, actor_id=self._actor_id, operation="review",
+                call_id=self._approval.id, request_sha256=digest, content_sha256=digest,
+            ):
+                return self._invoke_once(plan)
+        return self._invoke_once(plan)
+
+    def _invoke_once(self, plan: ReviewInvocationPlan) -> RawReviewOutput:
         approval = self._approval
         if approval is None:
             raise RealReviewNotAuthorized(
