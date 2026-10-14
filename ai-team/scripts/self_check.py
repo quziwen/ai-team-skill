@@ -357,6 +357,29 @@ def check_delivery_workflow() -> int:
     return 3
 
 
+def check_feedback_continuation() -> int:
+    for case, expected_status, expected_merges, expected_exit in (
+        ("normal", "completed", 2, 0),
+        ("wrong-sum", "needs_verification", 1, 2),
+        ("repeat", "completed", 2, 0),
+    ):
+        output = run_python(SCRIPTS / "feedback_demo.py", "--case", case, "--json")
+        if output.returncode != expected_exit:
+            fail("local feedback demo did not preserve its exit status")
+        receipt = json.loads(output.stdout)
+        if (
+            receipt.get("status") != expected_status
+            or receipt.get("total_merge_calls") != expected_merges
+            or receipt.get("author_revision_calls") != 1
+            or receipt.get("new_version") != 2
+            or receipt.get("original_task_unchanged") is not True
+            or receipt.get("unchanged_other_artifact") is not True
+            or receipt.get("real_agents_started") is not False
+        ):
+            fail("local feedback did not preserve version, unchanged work or duplicate handling")
+    return 3
+
+
 def main() -> int:
     try:
         version = check_manifest()
@@ -367,6 +390,7 @@ def main() -> int:
         delivery_count = check_delivery_verification()
         routing_count = check_task_routing()
         workflow_count = check_delivery_workflow()
+        feedback_count = check_feedback_continuation()
     except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError, subprocess.SubprocessError) as exc:
         print(json.dumps({"status": "FAIL", "error": str(exc)}, ensure_ascii=True))
         return 1
@@ -380,6 +404,7 @@ def main() -> int:
         "delivery_verification_checks": delivery_count,
         "task_routing_checks": routing_count,
         "delivery_workflow_checks": workflow_count,
+        "feedback_continuation_checks": feedback_count,
         "real_agents_started": False,
         "acceptance_boundary": "local package check only",
     }, ensure_ascii=True, sort_keys=True))

@@ -40,6 +40,10 @@ class AITeam:
         self.backend = backend or MockBackend()
         self.router = router or CapabilityRouter()
         self.review_capability = review_capability or CCRLReviewCapability()
+        self._current_result = None
+        self._current_requirements = None
+        self._feedback_cache = {}
+        self._feedback_busy = False
 
     def run(
         self,
@@ -51,6 +55,10 @@ class AITeam:
         if not task.strip():
             raise ValueError("任务不能为空")
 
+        if self._feedback_busy:
+            raise RuntimeError("修改接续期间不能另开任务")
+        self._current_result = None
+        self._feedback_cache.clear()
         events: list[str] = ["received"]
         assignments = self.router.plan(task)
         events.append("planned")
@@ -78,110 +86,157 @@ class AITeam:
 
         cycles: list[ReviewCycle] = []
         for index, assignment in enumerate(assignments):
-            artifact = latest_by_assignment[assignment.id]
-            author = self.router.get(assignment.agent_id)
             reviewer_assignment = assignments[(index + 1) % len(assignments)]
-            reviewer = self.router.get(reviewer_assignment.agent_id)
-            if author.id == reviewer.id:
-                raise RuntimeError("作者不能审阅自己的成果")
+            cycle, revised, updates = self._review_artifact(
+                task, assignment, latest_by_assignment[assignment.id],
+                reviewer_assignment.agent_id, events,
+            )
+            artifacts.extend(updates)
+            latest_by_assignment[assignment.id] = revised
+            cycles.append(cycle)
+        return self._finish(
+            task, assignments, artifacts, latest_by_assignment, cycles,
+            requirements, delivery_checker, events,
+        )
 
-            package = self.review_capability.prepare(
-                author, reviewer, artifact, assignment
-            )
-            validate_review_package(
-                package, author, reviewer, artifact, assignment
-            )
-            memo = self.review_capability.review(
-                self.backend,
-                reviewer,
-                artifact,
-                assignment,
-                task,
-                package,
-            )
-            validate_review_memo(package, memo)
-            events.append(f"reviewed:{assignment.id}:v{artifact.version}")
-            response = self.review_capability.respond(
-                self.backend, author, artifact, memo, task
-            )
-            validate_author_response(memo, response, author.id)
-            events.append(f"responded:{assignment.id}")
+    def continue_feedback(
+        self, previous, feedback, *, revision_provider, delivery_checker=None,
+    ):
+        """Continue one completed local run; the host prepares internal scope."""
+        from .feedback import continue_feedback
+        return continue_feedback(
+            self, previous, feedback, revision_provider=revision_provider,
+            delivery_checker=delivery_checker,
+        )
 
-            result_artifact = artifact
-            if response.revised_content is not None:
-                if not response.revised_content.strip():
-                    raise RuntimeError("作者修订内容不能为空")
-                result_artifact = Artifact(
-                    id=f"{assignment.id}-v{artifact.version + 1}",
-                    assignment_id=artifact.assignment_id,
-                    author_id=artifact.author_id,
-                    version=artifact.version + 1,
-                    content=response.revised_content,
-                )
-                artifacts.append(result_artifact)
-                latest_by_assignment[assignment.id] = result_artifact
+    def _review_artifact(
+        self, task, assignment, artifact, reviewer_id, events, *,
+        cycle_id=None, review_notes=None, revision_guard=None,
+    ):
+        author = self.router.get(assignment.agent_id)
+        reviewer = self.router.get(reviewer_id)
+        updates = []
+        # Extra notes stay separate from the original user task and assignment.
+        if review_notes is not None:
+            assignment = replace(
+                assignment, goal=assignment.goal + "\n补充修改要求：" + review_notes
+            )
+        if author.id == reviewer.id:
+            raise RuntimeError("作者不能审阅自己的成果")
 
-            validate_change_refs(response, artifact, result_artifact)
+        package = self.review_capability.prepare(
+            author, reviewer, artifact, assignment
+        )
+        validate_review_package(
+            package, author, reviewer, artifact, assignment
+        )
+        memo = self.review_capability.review(
+            self.backend,
+            reviewer,
+            artifact,
+            assignment,
+            task,
+            package,
+        )
+        validate_review_memo(package, memo)
+        events.append(f"reviewed:{assignment.id}:v{artifact.version}")
+        response = self.review_capability.respond(
+            self.backend, author, artifact, memo, task
+        )
+        validate_author_response(memo, response, author.id)
+        events.append(f"responded:{assignment.id}")
 
-            reassessment = self.review_capability.reassess(
-                self.backend,
-                reviewer,
-                memo,
-                response,
-                result_artifact,
+        result_artifact = artifact
+        if response.revised_content is not None:
+            if not response.revised_content.strip():
+                raise RuntimeError("作者修订内容不能为空")
+            result_artifact = Artifact(
+                id=f"{assignment.id}-v{artifact.version + 1}",
+                assignment_id=artifact.assignment_id,
+                author_id=artifact.author_id,
+                version=artifact.version + 1,
+                content=response.revised_content,
             )
-            validate_reassessment(
-                memo, response, reassessment, reviewer.id, result_artifact
-            )
-            if (
-                any(
-                    item.decision == "accept"
-                    for item in response.finding_responses
-                )
-                and reassessment.resolved
-                and (
-                    response.revised_content is None
-                    or response.revised_content.strip() == artifact.content.strip()
-                )
-            ):
-                raise RuntimeError("审阅要求修改时，必须基于实质修订后的新版本确认")
-            events.append(
-                f"rechecked:{assignment.id}:v{result_artifact.version}"
-            )
-            status = "confirmed" if reassessment.resolved else "disputed"
-            first_finding = memo.findings[0] if memo.findings else None
-            cycles.append(
-                ReviewCycle(
-                    id=f"review-{assignment.id}",
-                    assignment_id=assignment.id,
-                    author_id=author.id,
-                    reviewer_id=reviewer.id,
-                    review_package=package,
-                    review_memo=memo,
-                    structured_author_response=response,
-                    reviewer_reassessment_record=reassessment,
-                    reviewed_artifact_id=artifact.id,
-                    reviewed_version=artifact.version,
-                    initial_verdict=memo.verdict,
-                    review_comment=memo.summary,
-                    author_response=response.message,
-                    result_artifact_id=result_artifact.id,
-                    result_version=result_artifact.version,
-                    reviewer_confirmation=reassessment.comment,
-                    status=status,
-                    disagreement_topic=(
-                        first_finding.disagreement_topic if first_finding else None
-                    ),
-                    author_position=(
-                        first_finding.author_position if first_finding else None
-                    ),
-                    reviewer_position=(
-                        first_finding.reviewer_position if first_finding else None
-                    ),
-                )
-            )
+            updates.append(result_artifact)
 
-        arbitrations: list[ArbitrationDecision] = []
+        if revision_guard is not None:
+            revision_guard(result_artifact)
+        validate_change_refs(response, artifact, result_artifact)
+
+        reassessment = self.review_capability.reassess(
+            self.backend,
+            reviewer,
+            memo,
+            response,
+            result_artifact,
+        )
+        validate_reassessment(
+            memo, response, reassessment, reviewer.id, result_artifact
+        )
+        if (
+            any(
+                item.decision == "accept"
+                for item in response.finding_responses
+            )
+            and reassessment.resolved
+            and (
+                response.revised_content is None
+                or response.revised_content.strip() == artifact.content.strip()
+            )
+        ):
+            raise RuntimeError("审阅要求修改时，必须基于实质修订后的新版本确认")
+        events.append(
+            f"rechecked:{assignment.id}:v{result_artifact.version}"
+        )
+        status = "confirmed" if reassessment.resolved else "disputed"
+        first_finding = memo.findings[0] if memo.findings else None
+        cycle = ReviewCycle(
+                id=cycle_id or f"review-{assignment.id}",
+                assignment_id=assignment.id,
+                author_id=author.id,
+                reviewer_id=reviewer.id,
+                review_package=package,
+                review_memo=memo,
+                structured_author_response=response,
+                reviewer_reassessment_record=reassessment,
+                reviewed_artifact_id=artifact.id,
+                reviewed_version=artifact.version,
+                initial_verdict=memo.verdict,
+                review_comment=memo.summary,
+                author_response=response.message,
+                result_artifact_id=result_artifact.id,
+                result_version=result_artifact.version,
+                reviewer_confirmation=reassessment.comment,
+                status=status,
+                disagreement_topic=(
+                    first_finding.disagreement_topic if first_finding else None
+                ),
+                author_position=(
+                    first_finding.author_position if first_finding else None
+                ),
+                reviewer_position=(
+                    first_finding.reviewer_position if first_finding else None
+                ),
+            )
+        return cycle, result_artifact, tuple(updates)
+
+    def _finish(
+        self, task, assignments, artifacts, latest_by_assignment, cycles,
+        requirements, delivery_checker, events, existing_arbitrations=(),
+    ):
+        result = self._finish_result(
+            task, assignments, artifacts, latest_by_assignment, cycles,
+            requirements, delivery_checker, events, existing_arbitrations,
+        )
+        self._current_result = result
+        self._current_requirements = None if requirements is None else dict(requirements)
+        return result
+
+    def _finish_result(
+        self, task, assignments, artifacts, latest_by_assignment, cycles,
+        requirements, delivery_checker, events, existing_arbitrations=(),
+    ):
+        arbitrations: list[ArbitrationDecision] = list(existing_arbitrations)
         unresolved: list[UnresolvedDisagreement] = []
         final_cycles: list[ReviewCycle] = []
         for cycle in cycles:
@@ -377,6 +432,7 @@ class AITeam:
             events=tuple(events),
             delivery_verifications=verifications,
         )
+
 
 
 def _freeze_delivery_requirements(requirements, assignments, checker):

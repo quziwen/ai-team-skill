@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from .agents import CapabilityRouter
+from dataclasses import replace
+
 from .contracts import Artifact, RunResult
 
 
@@ -182,3 +184,18 @@ def render_markdown(
     else:
         lines.append(result.final_result)
     return "\n".join(lines)
+
+
+def render_feedback_markdown(outcome, router: CapabilityRouter | None = None) -> str:
+    """Show the same six sections, with the user's amendment kept separate."""
+    result = outcome.result or replace(
+        outcome.previous, status="needs_verification", final_artifact_ids=(),
+        final_result=None, integrator_id=None,
+    )
+    text = render_markdown(result, router)
+    notes = [f"补充意见：{outcome.feedback.text}", outcome.message]
+    for change in outcome.changes:
+        notes.append(f"- v{change.before_version} → v{change.after_version}：{change.summary}")
+    if outcome.reused_assignment_ids:
+        notes.append("未受影响的成果保持原文，没有重新生成。")
+    return text.replace("\n## 分工", "\n" + "\n".join(notes) + "\n\n## 分工", 1)
